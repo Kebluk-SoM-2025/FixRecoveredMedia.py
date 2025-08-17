@@ -68,9 +68,9 @@ class MediaFixer:
             return None
 
 
-    def format_filename(self, creation_time: datetime, file_extension: str) -> str:
+    def format_filename(self, creation_time: datetime, file_extension: str, format_string: str) -> str:
         """Format the filename based on the creation time."""
-        return self.image_format.format(
+        return format_string.format(
             Y=str(creation_time.year).zfill(2),
             M=str(creation_time.month).zfill(2),
             D=str(creation_time.day).zfill(2),
@@ -91,19 +91,19 @@ class MediaFixer:
             return
         try:
             file_path.rename(new_path)
-            print(f"\033[32mSuccessfully renamed '{file_path}' to '{new_path}'\033[0m")
+            print(f"\033[32mSuccessfully renamed '{file_path.relative_to(self.media_path)}' to '{new_path.relative_to(self.media_path)}'\033[0m")
             self.success += 1
         except Exception as e:
-            print(f"\033[31mError renaming file {file_path} to {new_path}: {e}\033[0m")
+            print(f"\033[31mError renaming file {file_path.relative_to(self.media_path)} to {new_path.relative_to(self.media_path)}: {e}\033[0m")
             self.failures.append(file_path)
 
 
     def print_summary(self) -> None:
         """Print the end summary."""
-        print(f"\nTotal files processed: {self.total}")
-        print(f"Successfully renamed files: {self.success}")
-        print(f"Success rate: {self.success / self.total * 100:.2f} %")
-        print(f"Failed renaming attempts: {len(self.failures)}")
+        print(f"\n\033[34mTotal files processed: {self.total}\033[0m")
+        print(f"\033[32mSuccessfully renamed files: {self.success}\033[0m")
+        print(f"\033[32mSuccess rate: {self.success / self.total * 100:.2f} %\033[0m")
+        print(f"\033[31mFailed renaming attempts: {len(self.failures)}\033[0m")
         if self.failures:
             print("\n\033[31mFailed Renaming Attempts:\033[0m")
             for path in self.failures:
@@ -118,15 +118,17 @@ class MediaFixer:
             file_extension = file_path.suffix.lower()
             self.total += 1
             creation_time = None
-            if file_extension in self.image_extensions:
+            is_image = file_extension in self.image_extensions
+            is_video = file_extension in self.video_extensions
+            if is_image:
                 creation_time = self.get_image_creation_time(str(file_path))
-            elif file_extension in self.video_extensions:
+            elif is_video:
                 creation_time = self.get_video_creation_time(str(file_path))
             else:
                 print(f"\033[33mUnsupported file format: {file_path.name}\033[0m")
                 continue
             if creation_time:
-                new_name = self.format_filename(creation_time, file_extension)
+                new_name = self.format_filename(creation_time, file_extension, self.image_format if is_image else self.video_format)
                 self.rename_file(file_path, new_name)
             else:
                 self.failures.append(str(file_path))
@@ -144,7 +146,7 @@ def main() -> None:
     print("\033[1;36mWelcome to the Recovered Media Fixer!\033[0m")
     print("Currently supported formats are: JPEG, MP4")
 
-    media_path = input("\nPlease enter the path to the media files: ").strip()
+    media_path = input("\nPlease enter the path to the media files: ").strip().removeprefix("\"").removesuffix("\"")
 
     if not Path(media_path).exists():
         raise FileNotFoundError(f"\n\033[31mThe specified path does not exist: {media_path}\033[0m")
@@ -160,8 +162,8 @@ def main() -> None:
     "\t{m} - Creation minute of original file\n" +
     "\t{s} - Creation second of original file\n" +
     "\t{ext} - The original file extension with the dot\n" +
-    "Note: All time values are zero-padded to two digits.\n" +
-    "Example: IMG_{Y}{M}{D}_{h}{m}{s}{ext} → IMG_20250816_224044.jpg\n")
+    "\033[34mNote: All time values are zero-padded to two digits.\033[0m\n" +
+    "\033[35mExample: IMG_{Y}{M}{D}_{h}{m}{s}{ext} → IMG_20250816_224044.jpg\033[0m\n")
 
     if separated_formats:
         image_format = input("Image format: ").strip()
@@ -181,3 +183,4 @@ if __name__ == "__main__":
         print("\n\033[31mProcess interrupted by user.\033[0m")
     except Exception as e:
         print(f"\n\033[31mError occurred: {e}\033[0m")
+    input("\nPress Enter to exit...")
