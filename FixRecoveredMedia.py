@@ -1,96 +1,152 @@
-import os
+from pathlib import Path
 from datetime import datetime
+from hachoir.parser import createParser
+from hachoir.metadata import extractMetadata
+from typing import Optional
+import exifread
 
 
 class MediaFixer:
     def __init__(self, media_path: str, image_format: str, video_format: str) -> None:
-        self.media_path = media_path
+        self.media_path = Path(media_path)
         self.image_format = image_format
         self.video_format = video_format
-        self.image_extensions = (".jpg", ".jpeg", ".jpe", ".jif", ".jfif", ".jfi")
-        self.video_extensions = (".mp4", ".m4a", ".m4p", ".m4b", ".m4r", ".m4v")
+        self.image_extensions = {".jpg", ".jpeg", ".jpe", ".jif", ".jfif", ".jfi"}
+        self.video_extensions = {".mp4", ".m4a", ".m4p", ".m4b", ".m4r", ".m4v"}
+        self.total = 0
+        self.success = 0
+        self.failures = []
 
 
-    def get_image_creation_time(self, file_path: str) -> tuple[datetime, bool]:
-        """Get the creation time and HDR status of a image file from its metadata."""
-
-
-    def get_video_creation_time(self, file_path: str) -> datetime:
-        """Get the creation time of a video file from its metadata."""
-
-
-    def format_image_filename(self, creation_time: datetime, file_extension: str, is_hdr: bool = False) -> str:
-        """Format the image filename based on the creation time and HDR status."""
-        hdr_suffix = "_HDR" if is_hdr else ""
-        return self.image_format.format(
-            Y=creation_time.year,
-            M=creation_time.month,
-            D=creation_time.day,
-            h=creation_time.hour,
-            m=creation_time.minute,
-            s=creation_time.second,
-            hdr=hdr_suffix,
-            ext=file_extension
-        )
-    
-
-    def format_video_filename(self, creation_time: datetime, file_extension: str) -> str:
-        """Format the video filename based on the creation time."""
-        return self.video_format.format(
-            Y=creation_time.year,
-            M=creation_time.month,
-            D=creation_time.day,
-            h=creation_time.hour,
-            m=creation_time.minute,
-            s=creation_time.second,
-            ext=file_extension
-        )
-    
-
-    def rename_file(self, file_path: str, new_name: str) -> None:
-        """Rename the file to the new name."""
-        new_name = os.path.join(os.path.dirname(file_path), new_name)
+    def get_image_creation_time(self, file_path: str) -> Optional[datetime]:
+        """Get the creation time of a image file from its metadata."""
         try:
-            os.rename(file_path, new_name)
+            with open(file_path, "rb") as f:
+                tags = exifread.process_file(f)
+                if not tags:
+                    print(f"\033[31mNo EXIF tags found in {file_path}.\033[0m")
+                    return None
+                
+                creation_time = tags.get("EXIF DateTimeOriginal") or tags.get("EXIF DateTime")
+                if not creation_time:
+                    print(f"\033[31mNo creation time found in EXIF tags of {file_path}.\033[0m")
+                    return None
+                creation_time = datetime.strptime(str(creation_time), "%Y:%m:%d %H:%M:%S")
+                
+                return creation_time
         except Exception as e:
-            print(f"Error renaming file {file_path} to {new_name}: {e}")
+            print(f"\033[31mError reading image metadata from {file_path}: {e}\033[0m")
+            return None
+
+
+    def get_video_creation_time(self, file_path: str) -> Optional[datetime]:
+        """Get the creation time of a video file from its metadata."""
+        try:
+            parser = createParser(file_path)
+            if not parser:
+                print(f"\033[31mCould not create parser for {file_path}.\033[0m")
+                return None
+
+            with parser:
+                try:
+                    metadata = extractMetadata(parser)
+                except Exception as e:
+                    print(f"\033[31mError extracting metadata from {file_path}: {e}\033[0m")
+
+            if not metadata:
+                print(f"\033[31mCould not extract metadata from {file_path}.\033[0m")
+                return None
+
+            creation_time = metadata.get("creation_date")
+            if not creation_time:
+                print(f"\033[31mCould not find creation time in metadata from {file_path}.\033[0m")
+                return None
+            parser.close()
+            return creation_time
+        except Exception as e:
+            print(f"\033[31mError reading video metadata from {file_path}: {e}\033[0m")
+            return None
+
+
+    def format_filename(self, creation_time: datetime, file_extension: str) -> str:
+        """Format the filename based on the creation time."""
+        return self.image_format.format(
+            Y=str(creation_time.year).zfill(2),
+            M=str(creation_time.month).zfill(2),
+            D=str(creation_time.day).zfill(2),
+            h=str(creation_time.hour).zfill(2),
+            m=str(creation_time.minute).zfill(2),
+            s=str(creation_time.second).zfill(2),
+            ext=file_extension
+        )
+    
+
+    def rename_file(self, file_path: Path, new_name: str, n: int = 1) -> None:
+        """Rename the file to the new name."""
+        new_path = file_path.parent / new_name
+        if new_path.exists():
+            stem, ext = new_path.stem, new_path.suffix
+            new_name = f"{stem}_{n}{ext}"
+            self.rename_file(file_path, new_name, n + 1)
+            return
+        try:
+            file_path.rename(new_path)
+            print(f"\033[32mSuccessfully renamed '{file_path}' to '{new_path}'\033[0m")
+            self.success += 1
+        except Exception as e:
+            print(f"\033[31mError renaming file {file_path} to {new_path}: {e}\033[0m")
+            self.failures.append(file_path)
+
+
+    def print_summary(self) -> None:
+        """Print the end summary."""
+        print(f"\nTotal files processed: {self.total}")
+        print(f"Successfully renamed files: {self.success}")
+        print(f"Success rate: {self.success / self.total * 100:.2f} %")
+        print(f"Failed renaming attempts: {len(self.failures)}")
+        if self.failures:
+            print("\n\033[31mFailed Renaming Attempts:\033[0m")
+            for path in self.failures:
+                print(f"\033[31m - {path}\033[0m")
 
 
     def process_media_files(self) -> None:
         """Process the media files."""
-        for root, _, files in os.walk(self.media_path):
-            for file in files:
-                file_path = os.path.join(root, file)
-                # Process image file
-                if file.lower().endswith(self.image_extensions):
-                    creation_time, is_hdr = self.get_image_creation_time(file_path)
-                    file_extension = os.path.splitext(file)[1].lower()
-                    if creation_time and is_hdr is not None and file_extension:
-                        new_name = self.format_image_filename(creation_time, file_extension, is_hdr)
-                        self.rename_file(file_path, new_name)
-
-                # Process video file
-                elif file.lower().endswith(self.video_extensions):
-                    creation_time = self.get_video_creation_time(file_path)
-                    file_extension = os.path.splitext(file)[1].lower()
-                    if creation_time and file_extension:
-                        new_name = self.format_video_filename(creation_time, file_extension)
-                        self.rename_file(file_path, new_name)
+        for file_path in self.media_path.rglob("*"):
+            if not file_path.is_file():
+                continue
+            file_extension = file_path.suffix.lower()
+            self.total += 1
+            creation_time = None
+            if file_extension in self.image_extensions:
+                creation_time = self.get_image_creation_time(str(file_path))
+            elif file_extension in self.video_extensions:
+                creation_time = self.get_video_creation_time(str(file_path))
+            else:
+                print(f"\033[33mUnsupported file format: {file_path.name}\033[0m")
+                continue
+            if creation_time:
+                new_name = self.format_filename(creation_time, file_extension)
+                self.rename_file(file_path, new_name)
+            else:
+                self.failures.append(str(file_path))
+        self.print_summary()
 
 
 def clear_screen() -> None:
+    import os
     os.system("cls" if os.name == "nt" else "clear")
 
 
 def main() -> None:
     clear_screen()
 
-    print("\n\033[1;36mWelcome to the Recovered Media Fixer!\033[0m")
+    print("\033[1;36mWelcome to the Recovered Media Fixer!\033[0m")
     print("Currently supported formats are: JPEG, MP4")
 
     media_path = input("\nPlease enter the path to the media files: ").strip()
 
-    if not os.path.exists(media_path):
+    if not Path(media_path).exists():
         raise FileNotFoundError(f"\n\033[31mThe specified path does not exist: {media_path}\033[0m")
 
     separated_formats = (input("Do you want to define separated filename formats for images and videos? (y/n) [y]: ").strip().lower() or "y") == "y"
@@ -103,9 +159,9 @@ def main() -> None:
     "\t{h} - Creation hour of original file\n" +
     "\t{m} - Creation minute of original file\n" +
     "\t{s} - Creation second of original file\n" +
-    "\t{hdr} - Adds \"_HDR\" if the photo is HDR, otherwise nothing\n" +
-    "\t{ext} - The original file extension\n" +
-    "Example: IMG_{Y}{M}{D}_{h}{m}{s}{hdr}{ext} → IMG_20250816_224044_HDR.jpg\n")
+    "\t{ext} - The original file extension with the dot\n" +
+    "Note: All time values are zero-padded to two digits.\n" +
+    "Example: IMG_{Y}{M}{D}_{h}{m}{s}{ext} → IMG_20250816_224044.jpg\n")
 
     if separated_formats:
         image_format = input("Image format: ").strip()
